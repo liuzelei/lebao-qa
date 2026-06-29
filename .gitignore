@@ -1,0 +1,20 @@
+# Build artifacts
+dist/
+build/
+__pycache__/
+*.pyc
+*.spec
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output (generated at runtime)
+output/
+
+# Sample data (not needed for build)
+sample/
+
+# IDE
+.idea/
+.vscode/

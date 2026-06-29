@@ -1,0 +1,45 @@
+name: Build LebaoLabelPrinter EXE (x64)
+
+on:
+  # Push to main branch triggers build
+  push:
+    branches: [main]
+  # Manual trigger from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest  # x64 Windows runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas openpyxl pyinstaller
+
+      - name: Ensure output directory exists
+        run: if not exist output mkdir output
+        shell: cmd
+
+      - name: Build EXE with PyInstaller
+        run: |
+          python -m PyInstaller --onedir --windowed --name="LebaoLabelPrinter" --add-data="config.ini;." --add-data="README.txt;." --add-data="output;output" --hidden-import=pandas --hidden-import=openpyxl --hidden-import=pandas._libs.tslibs --clean label_printer.py
+
+      - name: List build output
+        run: dir dist\LebaoLabelPrinter
+        shell: cmd
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LebaoLabelPrinter-x64
+          path: dist/LebaoLabelPrinter/
+          retention-days: 30

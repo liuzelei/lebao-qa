@@ -265,7 +265,7 @@ def main():
         '--windowed',
         '--name=LebaoLabelPrinter',
         '--add-data=config.ini;.',
-        '--add-data=README.txt;.',
+        '--add-data=README.md;.',
         '--add-data=output;output',
         '--hidden-import=pandas',
         '--hidden-import=openpyxl',

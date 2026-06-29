@@ -103,6 +103,6 @@ jobs:
             ### 文件清单
             - `LebaoLabelPrinter.exe` — 主程序
             - `config.ini` — 配置文件（需编辑）
-            - `README.txt` — 说明文档
+            - `README.md` — 说明文档
             - `output/` — CSV 输出目录
           files: ./artifacts/*.zip

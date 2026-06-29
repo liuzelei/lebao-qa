@@ -21,7 +21,7 @@ jobs:
         include:
           - arch: x64
             runner: windows-latest
-            python-version: '3.12'
+            python-version: '3.8'
           - arch: arm64
             runner: windows-11-arm
             python-version: '3.13'
@@ -37,18 +37,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas openpyxl pyinstaller
-
-      - name: Ensure output directory exists
-        run: if not exist output mkdir output
-        shell: cmd
-
-      - name: Build EXE with PyInstaller
-        run: |
-          python -m PyInstaller --onedir --windowed --name="LebaoLabelPrinter" --add-data="config.ini;." --add-data="README.txt;." --add-data="output;output" --hidden-import=pandas --hidden-import=openpyxl --hidden-import=pandas._libs.tslibs --clean label_printer.py
+      - name: Build EXE via build.py (CI mode)
+        run: python build.py --ci
 
       - name: Zip build output
         run: |
@@ -101,8 +91,8 @@ jobs:
             ## 原料留样标签打印工具
 
             ### 下载说明
-            - **x64**: 适用于绝大多数 Windows 电脑（Intel/AMD 64位）
-            - **arm64**: 适用于 ARM64 Windows 设备（如 Surface Pro X、Copilot+ PC）
+            - **x64**: 适用于绝大多数 Windows 电脑（Intel/AMD 64位），**支持 Windows 7 SP1 及以上**
+            - **arm64**: 适用于 ARM64 Windows 设备（如 Surface Pro X、Copilot+ PC），需 Windows 11
 
             ### 使用方法
             1. 下载对应架构的 zip 文件

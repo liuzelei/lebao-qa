@@ -4,6 +4,10 @@
 Build script for LebaoLabelPrinter EXE
 Handles Python version detection, dependency install, and PyInstaller build
 with explicit VC runtime DLL bundling for Python 3.13+
+
+Usage:
+  python build.py          # interactive mode (local build)
+  python build.py --ci     # CI mode (no interactive prompts, for GitHub Actions)
 """
 
 import subprocess
@@ -11,12 +15,67 @@ import sys
 import os
 import shutil
 import glob
+import platform
+
+
+# CI mode: suppress all input() prompts
+CI_MODE = '--ci' in sys.argv
+
+
+def is_windows7():
+    """Check if running on Windows 7 (version 6.1)."""
+    if sys.platform != 'win32':
+        return False
+    ver = platform.version()
+    try:
+        major, minor = map(int, ver.split('.')[:2])
+        return major == 6 and minor <= 1  # 6.0=Vista, 6.1=Win7
+    except (ValueError, IndexError):
+        return False
+
+
+def robust_rmtree(path):
+    """Remove directory tree, robust against Windows file locking."""
+    if not os.path.exists(path):
+        return
+    abs_path = os.path.abspath(path)
+    if sys.platform == 'win32':
+        # Use Windows native rmdir - much more reliable than shutil.rmtree
+        subprocess.run(
+            ['cmd', '/c', 'rmdir', '/s', '/q', abs_path],
+            capture_output=True, timeout=60
+        )
+        if os.path.exists(path):
+            # Retry with shutil as fallback
+            shutil.rmtree(path, ignore_errors=True)
+    else:
+        shutil.rmtree(path)
+    # Final check
+    if os.path.exists(path):
+        print(f"[WARNING] Could not fully remove {path} - some files may be locked")
+        print("  Close any programs using this folder and try again")
 
 
 def find_compatible_python():
-    """Find a Python 3.10-3.13 for building. Returns (executable_path, version_string)."""
-    # Try py launcher versions in priority order
-    for ver in ['3.13', '3.12', '3.11', '3.10']:
+    """Find a Python 3.8-3.13 for building. Returns (executable_path, version_string)."""
+    # In CI mode, use the Python already set up by setup-python (don't search for others)
+    if CI_MODE:
+        v = sys.version_info
+        if v.major == 3 and 8 <= v.minor <= 13:
+            return sys.executable, f"Python {v.major}.{v.minor}.{v.micro}"
+        print(f"[CI ERROR] Current Python {v.major}.{v.minor} is not compatible (need 3.8-3.13)")
+        return None, None
+
+    # On Win7, prioritize Python 3.8 (the last version that supports Win7)
+    # On Win8+, prioritize Python 3.13 (latest, best PyInstaller support)
+    if is_windows7():
+        preferred_order = ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+        print("[INFO] Windows 7 detected - prioritizing Python 3.8 for Win7-compatible build")
+        print()
+    else:
+        preferred_order = ['3.13', '3.12', '3.11', '3.10', '3.9', '3.8']
+
+    for ver in preferred_order:
         try:
             result = subprocess.run(
                 ['py', f'-{ver}', '-c', 'import sys; print(sys.executable)'],
@@ -40,13 +99,13 @@ def find_compatible_python():
 
     # Try current interpreter
     v = sys.version_info
-    if v.major == 3 and v.minor <= 13:
+    if v.major == 3 and 8 <= v.minor <= 13:
         return sys.executable, f"Python {v.major}.{v.minor}.{v.micro}"
 
     # Try generic python
     try:
         result = subprocess.run(
-            ['python', '-c', 'import sys; v=sys.version_info; print(sys.executable if v.minor<=13 else "")'],
+            ['python', '-c', 'import sys; v=sys.version_info; print(sys.executable if 8<=v.minor<=13 else "")'],
             capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -94,10 +153,11 @@ def main():
     py_exe, py_ver = find_compatible_python()
     if not py_exe:
         print("[ERROR] No compatible Python found!")
-        print("  Need Python 3.10, 3.11, 3.12, or 3.13")
+        print("  Need Python 3.8-3.13 (3.8 for Windows 7, 3.9+ for Windows 8+)")
         print("  Python 3.14+ is NOT supported by PyInstaller")
         print("  Install from: https://www.python.org/downloads/")
-        input("Press Enter to exit...")
+        if not CI_MODE:
+            input("Press Enter to exit...")
         sys.exit(1)
 
     # Check version
@@ -108,17 +168,33 @@ def main():
     major_minor = v_info.stdout.strip()
     minor = int(major_minor.split('.')[1])
 
+    # Determine pandas version constraint
+    # pandas 2.0+ requires Python 3.9+, so Python 3.8 needs pandas 1.5.x
+    if minor <= 8:
+        pandas_pkg = 'pandas<2.0'
+        win7_note = "  NOTE: This build supports Windows 7 (Python 3.8 + pandas 1.5.x)"
+    elif minor >= 14:
+        pandas_pkg = 'pandas'
+        win7_note = "  WARNING: This build will NOT run on Windows 7!"
+    else:
+        pandas_pkg = 'pandas'
+        win7_note = "  NOTE: This build requires Windows 8+ (Python 3.9+)"
+
     if minor >= 14:
         print(f"[WARNING] Python {major_minor} is NOT supported by PyInstaller!")
         print("  The EXE will fail on other machines (python3xx.dll error)")
         print("  Please install Python 3.12 or 3.13 from python.org")
         print()
-        confirm = input("Continue anyway? (y/N): ").strip().lower()
-        if confirm != 'y':
-            sys.exit(1)
+        if CI_MODE:
+            print("[CI] Skipping confirmation - continuing anyway")
+        else:
+            confirm = input("Continue anyway? (y/N): ").strip().lower()
+            if confirm != 'y':
+                sys.exit(1)
 
     print(f"[OK] Using: {py_ver}")
     print(f"      Path: {py_exe}")
+    print(win7_note)
     print()
 
     # 2. Get Python base prefix
@@ -145,7 +221,7 @@ def main():
     # 4. Install dependencies
     print("[1/4] Installing dependencies...")
     subprocess.run(
-        [py_exe, '-m', 'pip', 'install', 'pandas', 'openpyxl',
+        [py_exe, '-m', 'pip', 'install', pandas_pkg, 'openpyxl',
          '--quiet', '--no-warn-script-location'],
         check=True
     )
@@ -164,8 +240,9 @@ def main():
     print("[3/4] Cleaning old builds...")
     for d in ['build', 'dist']:
         if os.path.exists(d):
-            shutil.rmtree(d)
-            print(f"      Removed {d}/")
+            robust_rmtree(d)
+            if not os.path.exists(d):
+                print(f"      Removed {d}/")
     spec = 'LebaoLabelPrinter.spec'
     if os.path.exists(spec):
         os.remove(spec)
@@ -212,8 +289,9 @@ def main():
         print("  Common causes:")
         print("  1. Not enough disk space (need 500MB+)")
         print("  2. Antivirus blocking (disable temporarily)")
-        print("  3. Python version incompatible (use 3.10-3.13)")
-        input("Press Enter to exit...")
+        print("  3. Python version incompatible (use 3.8-3.13)")
+        if not CI_MODE:
+            input("Press Enter to exit...")
         sys.exit(1)
 
     # 9. Also copy any remaining needed DLLs from Python dir to _internal
@@ -261,12 +339,13 @@ def main():
     print("=" * 44)
     print()
 
-    # Auto-open dist folder on Windows
-    if sys.platform == 'win32':
+    # Auto-open dist folder on Windows (skip in CI)
+    if sys.platform == 'win32' and not CI_MODE:
         dist_dir = os.path.join(os.getcwd(), 'dist', 'LebaoLabelPrinter')
         os.startfile(dist_dir)
 
-    input("Press Enter to exit...")
+    if not CI_MODE:
+        input("Press Enter to exit...")
 
 
 if __name__ == '__main__':
@@ -276,5 +355,6 @@ if __name__ == '__main__':
         print(f"\n[ERROR] Build script crashed: {e}")
         import traceback
         traceback.print_exc()
-        input("Press Enter to exit...")
+        if not CI_MODE:
+            input("Press Enter to exit...")
         sys.exit(1)

@@ -1,9 +1,18 @@
-name: Build LebaoLabelPrinter EXE
+name: Build & Release LebaoLabelPrinter
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v2.1.0)'
+        required: true
+        default: 'v2.1.0'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -13,11 +22,9 @@ jobs:
           - arch: x64
             runner: windows-latest
             python-version: '3.12'
-            artifact-name: LebaoLabelPrinter-x64
           - arch: arm64
             runner: windows-11-arm
             python-version: '3.13'
-            artifact-name: LebaoLabelPrinter-arm64
 
     runs-on: ${{ matrix.runner }}
 
@@ -43,13 +50,69 @@ jobs:
         run: |
           python -m PyInstaller --onedir --windowed --name="LebaoLabelPrinter" --add-data="config.ini;." --add-data="README.txt;." --add-data="output;output" --hidden-import=pandas --hidden-import=openpyxl --hidden-import=pandas._libs.tslibs --clean label_printer.py
 
-      - name: List build output
-        run: dir dist\LebaoLabelPrinter
-        shell: cmd
+      - name: Zip build output
+        run: |
+          cd dist
+          Compress-Archive -Path LebaoLabelPrinter -DestinationPath LebaoLabelPrinter-${{ matrix.arch }}.zip
+        shell: pwsh
 
-      - name: Upload EXE artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact-name }}
-          path: dist/LebaoLabelPrinter/
-          retention-days: 30
+          name: LebaoLabelPrinter-${{ matrix.arch }}
+          path: dist/LebaoLabelPrinter-${{ matrix.arch }}.zip
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: LebaoLabelPrinter-x64
+          path: ./artifacts
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: LebaoLabelPrinter-arm64
+          path: ./artifacts
+
+      - name: List artifacts
+        run: ls -la ./artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: LebaoLabelPrinter ${{ steps.version.outputs.tag }}
+          body: |
+            ## 原料留样标签打印工具
+
+            ### 下载说明
+            - **x64**: 适用于绝大多数 Windows 电脑（Intel/AMD 64位）
+            - **arm64**: 适用于 ARM64 Windows 设备（如 Surface Pro X、Copilot+ PC）
+
+            ### 使用方法
+            1. 下载对应架构的 zip 文件
+            2. 解压到任意目录
+            3. 编辑 `config.ini` 配置打印机、模板路径和必检列名
+            4. 双击 `LebaoLabelPrinter.exe` 运行
+
+            ### 文件清单
+            - `LebaoLabelPrinter.exe` — 主程序
+            - `config.ini` — 配置文件（需编辑）
+            - `README.txt` — 说明文档
+            - `output/` — CSV 输出目录
+          files: ./artifacts/*.zip
